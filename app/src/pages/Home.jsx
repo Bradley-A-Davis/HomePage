@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import Navbar from '../components/Navbar.jsx';
 import * as THREE from 'three';
 
 export default function Home() {
@@ -20,23 +21,56 @@ export default function Home() {
       100
     );
     camera.position.set(0, 0.9, 12);
-    camera.lookAt(0, 0.9, 0);
+    camera.lookAt(0, 1.1, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(mount.clientWidth, mount.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setClearColor(0x000000, 0);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     mount.appendChild(renderer.domElement);
 
-    const ambient = new THREE.AmbientLight('#f7e6ff', 0.25);
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2(2, 2);
+    let hoveredMesh = null;
+
+    const ambient = new THREE.AmbientLight('#f7e6ff', 0.45);
     scene.add(ambient);
 
-    const hemisphere = new THREE.HemisphereLight('#ffffff', '#1b0b2b', 0.7);
+    const hemisphere = new THREE.HemisphereLight('#ffffff', '#2a143f', 0.85);
     scene.add(hemisphere);
 
-    const sunLight = new THREE.DirectionalLight('#ffffff', 0.9);
+    const sunLight = new THREE.DirectionalLight('#ffffff', 1.05);
     sunLight.position.set(6, 8, 4);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 1024;
+    sunLight.shadow.mapSize.height = 1024;
+    sunLight.shadow.camera.near = 1;
+    sunLight.shadow.camera.far = 30;
+    sunLight.shadow.camera.left = -12;
+    sunLight.shadow.camera.right = 12;
+    sunLight.shadow.camera.top = 12;
+    sunLight.shadow.camera.bottom = -12;
     scene.add(sunLight);
+
+    const fillLight = new THREE.DirectionalLight('#cfe7ff', 0.55);
+    fillLight.position.set(-6, 4, 6);
+    fillLight.castShadow = true;
+    fillLight.shadow.mapSize.width = 1024;
+    fillLight.shadow.mapSize.height = 1024;
+    fillLight.shadow.camera.near = 1;
+    fillLight.shadow.camera.far = 30;
+    fillLight.shadow.camera.left = -12;
+    fillLight.shadow.camera.right = 12;
+    fillLight.shadow.camera.top = 12;
+    fillLight.shadow.camera.bottom = -12;
+    fillLight.visible = false;
+    scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight('#ffffff', 0.35);
+    rimLight.position.set(0, 6, -8);
+    scene.add(rimLight);
 
     const pillarSize = { width: 1.6, height: 4, depth: 1.6 };
     const baseSize = { radius: 1.3, height: 0.5 };
@@ -67,18 +101,22 @@ export default function Home() {
     const pillarSideMaterial = new THREE.MeshStandardMaterial({
       color: '#ffffff',
       map: pillarGradientMap,
-      roughness: 0.25,
-      metalness: 0.6,
+      roughness: 0.2,
+      metalness: 0.7,
+      emissive: '#274036',
+      emissiveIntensity: 0.12,
     });
     const pillarTopMaterial = new THREE.MeshStandardMaterial({
-      color: '#c5e0cd',
-      roughness: 0.25,
-      metalness: 0.6,
+      color: '#d9efe1',
+      roughness: 0.22,
+      metalness: 0.7,
+      emissive: '#2b3d34',
+      emissiveIntensity: 0.08,
     });
     const pillarBottomMaterial = new THREE.MeshStandardMaterial({
-      color: '#000000',
-      roughness: 0.25,
-      metalness: 0.6,
+      color: '#0d0b12',
+      roughness: 0.35,
+      metalness: 0.5,
     });
     const pillarMaterial = [
       pillarSideMaterial,
@@ -90,6 +128,7 @@ export default function Home() {
     ];
     const rowGroups = [];
     const rowMeshes = [];
+    const rowHeightStep = 0.17;
 
     const baseGeometry = new THREE.CylinderGeometry(
       baseSize.radius,
@@ -104,6 +143,7 @@ export default function Home() {
       metalness: 0.2,
     });
     const base = new THREE.Mesh(baseGeometry, baseMaterial);
+    base.receiveShadow = true;
     base.position.y = -2.5;
     scene.add(base);
 
@@ -115,11 +155,13 @@ export default function Home() {
       side: THREE.DoubleSide,
     });
     const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.receiveShadow = true;
     floor.rotation.x = -Math.PI / 2;
     floor.position.y = -2.75;
     scene.add(floor);
 
     let animationFrame = 0;
+    const hoverLift = 1.1;
 
     const getPlaneIntersectionX = (ndcX, planeZ) => {
       const ndcPoint = new THREE.Vector3(ndcX, 0, 0.5).unproject(camera);
@@ -180,6 +222,9 @@ export default function Home() {
 
         while (meshes.length < needed) {
           const mesh = new THREE.Mesh(pillarGeometry, pillarMaterial);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          mesh.userData.bobOffset = Math.random() * Math.PI * 2;
           group.add(mesh);
           meshes.push(mesh);
         }
@@ -189,7 +234,7 @@ export default function Home() {
         }
 
         const rowStartX = startX + rowIndex * pillarSize.width;
-        const rowScale = 1 + rowIndex * 0.2625;
+        const rowScale = 1 + rowIndex * rowHeightStep;
         for (let i = 0; i < meshes.length; i += 1) {
           const mesh = meshes[i];
           const columnIndex = visibleIndices[i];
@@ -221,11 +266,12 @@ export default function Home() {
       const topY = (low + high) / 2;
       for (let rowIndex = 0; rowIndex < rowMeshes.length; rowIndex += 1) {
         const meshes = rowMeshes[rowIndex];
-        const rowScale = 1 + rowIndex * 0.2625;
-        const rowTopY = topY + rowIndex * pillarSize.height * 0.2625;
+        const rowScale = 1 + rowIndex * rowHeightStep;
+        const rowTopY = topY + rowIndex * pillarSize.height * rowHeightStep;
         for (const mesh of meshes) {
           mesh.scale.y = rowScale;
           mesh.position.y = rowTopY - (pillarSize.height * rowScale) / 2;
+          mesh.userData.baseY = mesh.position.y;
         }
       }
 
@@ -236,7 +282,34 @@ export default function Home() {
 
     const animate = () => {
       animationFrame = window.requestAnimationFrame(animate);
+      const allMeshes = rowMeshes.flat();
+      const time = performance.now() * 0.001;
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(allMeshes, false);
+      hoveredMesh = intersects.length > 0 ? intersects[0].object : null;
+
+      for (const mesh of allMeshes) {
+        const baseY = mesh.userData.baseY ?? mesh.position.y;
+        const currentLift = mesh.userData.currentLift ?? 0;
+        const targetLift = mesh === hoveredMesh ? hoverLift : 0;
+        const nextLift = currentLift + (targetLift - currentLift) * 0.35;
+        const bobOffset = mesh.userData.bobOffset ?? 0;
+        const bob = Math.sin(time * 0.6 + bobOffset) * 0.35;
+        mesh.userData.currentLift = nextLift;
+        mesh.position.y = baseY + bob + nextLift;
+      }
       renderer.render(scene, camera);
+    };
+
+    const handlePointerMove = (event) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    };
+
+    const handlePointerLeave = () => {
+      mouse.set(2, 2);
+      hoveredMesh = null;
     };
 
     const handleResize = () => {
@@ -254,10 +327,14 @@ export default function Home() {
     layoutPillarsToScreenWidth();
     alignPillarsToScreenBottom();
     window.addEventListener('resize', handleResize);
+    renderer.domElement.addEventListener('pointermove', handlePointerMove);
+    renderer.domElement.addEventListener('pointerleave', handlePointerLeave);
     animate();
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      renderer.domElement.removeEventListener('pointermove', handlePointerMove);
+      renderer.domElement.removeEventListener('pointerleave', handlePointerLeave);
       window.cancelAnimationFrame(animationFrame);
       renderer.dispose();
       pillarGeometry.dispose();
@@ -274,13 +351,60 @@ export default function Home() {
   }, []);
 
   return (
-    <div
-      ref={mountRef}
-      style={{
-        width: '100vw',
-        height: '100vh',
-        background: 'linear-gradient(135deg, #000000 0%, #c5e0cd 100%)',
-      }}
-    />
+    <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
+      <Navbar />
+      <div
+        style={{
+          position: 'absolute',
+          top: '90px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          textAlign: 'center',
+          zIndex: 2,
+          pointerEvents: 'none',
+        }}
+      >
+        <div
+          style={{
+            fontSize: 'clamp(12px, 1.4vw, 18px)',
+            fontWeight: 600,
+            letterSpacing: '0.32em',
+            textTransform: 'uppercase',
+            color: 'rgba(255, 255, 255, 0.7)',
+            marginBottom: '6px',
+          }}
+        >
+          Welcome To The
+        </div>
+        <div
+          style={{
+            fontSize: 'clamp(32px, 6vw, 72px)',
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            fontFamily:
+              '"SF Pro Rounded", "Avenir Next Rounded", "Helvetica Rounded", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif',
+            textTransform: 'uppercase',
+            color: 'transparent',
+            backgroundImage:
+              'linear-gradient(120deg, rgba(255, 255, 255, 0.95), rgba(210, 245, 255, 0.45), rgba(255, 255, 255, 0.9))',
+            WebkitBackgroundClip: 'text',
+            backgroundClip: 'text',
+            textShadow:
+              '0 8px 24px rgba(9, 20, 28, 0.45), 0 2px 6px rgba(255, 255, 255, 0.35)',
+            filter: 'drop-shadow(0 12px 28px rgba(4, 12, 18, 0.35))',
+          }}
+        >
+          Integration Station
+        </div>
+      </div>
+      <div
+        ref={mountRef}
+        style={{
+          width: '100%',
+          height: '100%',
+          background: 'linear-gradient(135deg, #000000 0%, #c5e0cd 100%)',
+        }}
+      />
+    </div>
   );
 }
