@@ -34,14 +34,16 @@ export default function Home() {
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2(2, 2);
     let hoveredMesh = null;
+    let tappedMesh = null;
+    let tapLiftTimeout = null;
 
-    const ambient = new THREE.AmbientLight('#f7e6ff', 0.45);
+    const ambient = new THREE.AmbientLight('#f7e6ff', 0.7);
     scene.add(ambient);
 
-    const hemisphere = new THREE.HemisphereLight('#ffffff', '#2a143f', 0.85);
+    const hemisphere = new THREE.HemisphereLight('#ffffff', '#2a143f', 1.1);
     scene.add(hemisphere);
 
-    const sunLight = new THREE.DirectionalLight('#ffffff', 1.05);
+    const sunLight = new THREE.DirectionalLight('#ffffff', 1.25);
     sunLight.position.set(6, 8, 4);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.width = 1024;
@@ -126,9 +128,57 @@ export default function Home() {
       pillarSideMaterial,
       pillarSideMaterial,
     ];
+    const linkConfigs = [
+      {
+        url: 'https://admin.davisbisbee.com',
+        color: '#3b82f6',
+        emissive: '#1d4ed8',
+        image: '/sprites/admin4.png',
+      },{
+        url: 'https://bradley.davisbisbee.com',
+        color: '#be3bf6',
+        emissive: '#6e1dd8',
+        image: '/sprites/bradres1.png',
+      },{
+        url: 'https://cassidy.davisbisbee.com',
+        color: '#f497ee',
+        emissive: '#bc6ecc',
+        image: '/sprites/cassidy3.png',
+      },
+    ];
+    const textureLoader = new THREE.TextureLoader();
+    const linkMaterials = linkConfigs.map((config) => {
+      const materials = pillarMaterial.map((material) => material.clone());
+      for (const material of materials) {
+        if (material.color && config.color) {
+          material.color.set(config.color);
+        }
+        if (material.emissive && config.emissive) {
+          material.emissive.set(config.emissive);
+          material.emissiveIntensity = 0.22;
+        }
+      }
+      return materials;
+    });
+    const linkSprites = linkConfigs.map((config) => {
+      if (!config.image) {
+        return null;
+      }
+      const texture = textureLoader.load(config.image);
+      const spriteMaterial = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+      });
+      const sprite = new THREE.Sprite(spriteMaterial);
+      sprite.scale.set(2.2, 2.2, 1);
+      sprite.visible = false;
+      scene.add(sprite);
+      return { texture, spriteMaterial, sprite };
+    });
     const rowGroups = [];
     const rowMeshes = [];
     const rowHeightStep = 0.17;
+    const linkMeshesByIndex = [];
 
     const baseGeometry = new THREE.CylinderGeometry(
       baseSize.radius,
@@ -185,6 +235,8 @@ export default function Home() {
       const baseCount =
         Math.round((endX - startX) / pillarSize.width) + 1;
       const rowSpacing = pillarSize.depth;
+      linkMeshesByIndex.length = 0;
+      let linkIndex = 0;
 
       const rowCounts = [];
       let count = baseCount;
@@ -235,12 +287,38 @@ export default function Home() {
 
         const rowStartX = startX + rowIndex * pillarSize.width;
         const rowScale = 1 + rowIndex * rowHeightStep;
+        const linkColumnIndices = new Map();
+        if (rowIndex >= 1) {
+          const centerIndex = (columns - 1) / 2;
+          const orderedIndices = [...visibleIndices].sort(
+            (a, b) =>
+              Math.abs(a - centerIndex) - Math.abs(b - centerIndex)
+          );
+          for (const columnIndex of orderedIndices) {
+            if (linkIndex >= linkConfigs.length) {
+              break;
+            }
+            linkColumnIndices.set(columnIndex, linkIndex);
+            linkIndex += 1;
+          }
+        }
         for (let i = 0; i < meshes.length; i += 1) {
           const mesh = meshes[i];
           const columnIndex = visibleIndices[i];
           mesh.scale.y = rowScale;
           mesh.position.x = rowStartX + columnIndex * pillarSize.width;
           mesh.position.z = -rowIndex * rowSpacing;
+          const linkConfigIndex = linkColumnIndices.get(columnIndex);
+          if (linkConfigIndex !== undefined) {
+            mesh.material = linkMaterials[linkConfigIndex];
+            mesh.userData.linkUrl = linkConfigs[linkConfigIndex].url;
+            mesh.userData.linkIndex = linkConfigIndex;
+            linkMeshesByIndex[linkConfigIndex] = mesh;
+          } else {
+            mesh.material = pillarMaterial;
+            mesh.userData.linkUrl = null;
+            mesh.userData.linkIndex = null;
+          }
         }
       }
     };
@@ -287,29 +365,100 @@ export default function Home() {
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObjects(allMeshes, false);
       hoveredMesh = intersects.length > 0 ? intersects[0].object : null;
+      renderer.domElement.style.cursor =
+        hoveredMesh && hoveredMesh.userData.linkUrl ? 'pointer' : 'default';
 
       for (const mesh of allMeshes) {
         const baseY = mesh.userData.baseY ?? mesh.position.y;
         const currentLift = mesh.userData.currentLift ?? 0;
-        const targetLift = mesh === hoveredMesh ? hoverLift : 0;
+        const targetLift =
+          mesh === hoveredMesh || mesh === tappedMesh ? hoverLift : 0;
         const nextLift = currentLift + (targetLift - currentLift) * 0.35;
         const bobOffset = mesh.userData.bobOffset ?? 0;
         const bob = Math.sin(time * 0.6 + bobOffset) * 0.35;
         mesh.userData.currentLift = nextLift;
         mesh.position.y = baseY + bob + nextLift;
       }
+      for (let i = 0; i < linkSprites.length; i += 1) {
+        const spriteEntry = linkSprites[i];
+        if (!spriteEntry) {
+          continue;
+        }
+        const mesh = linkMeshesByIndex[i];
+        if (mesh) {
+          spriteEntry.sprite.visible = true;
+          spriteEntry.sprite.position.set(
+            mesh.position.x,
+            mesh.position.y + pillarSize.height * mesh.scale.y * 0.7,
+            mesh.position.z
+          );
+          spriteEntry.sprite.lookAt(camera.position);
+        } else {
+          spriteEntry.sprite.visible = false;
+        }
+      }
       renderer.render(scene, camera);
     };
 
-    const handlePointerMove = (event) => {
+    const updatePointerFromEvent = (event) => {
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     };
 
+    const handlePointerMove = (event) => {
+      updatePointerFromEvent(event);
+    };
+
     const handlePointerLeave = () => {
       mouse.set(2, 2);
       hoveredMesh = null;
+      renderer.domElement.style.cursor = 'default';
+    };
+
+    const openLink = (url, isTouch) => {
+      if (isTouch) {
+        window.location.assign(url);
+        return;
+      }
+      window.open(url, '_blank', 'noopener,noreferrer');
+    };
+
+    const handlePointerDown = (event) => {
+      updatePointerFromEvent(event);
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(rowMeshes.flat(), false);
+      const hitMesh = intersects.length > 0 ? intersects[0].object : null;
+      if (!hitMesh || !hitMesh.userData.linkUrl) {
+        tappedMesh = null;
+        return;
+      }
+
+      const isTouch = event.pointerType === 'touch';
+      if (!isTouch) {
+        openLink(hitMesh.userData.linkUrl, false);
+        return;
+      }
+
+      if (tappedMesh === hitMesh) {
+        tappedMesh = null;
+        if (tapLiftTimeout) {
+          window.clearTimeout(tapLiftTimeout);
+          tapLiftTimeout = null;
+        }
+        openLink(hitMesh.userData.linkUrl, true);
+        return;
+      }
+
+      tappedMesh = hitMesh;
+      if (tapLiftTimeout) {
+        window.clearTimeout(tapLiftTimeout);
+      }
+      tapLiftTimeout = window.setTimeout(() => {
+        if (tappedMesh === hitMesh) {
+          tappedMesh = null;
+        }
+      }, 1500);
     };
 
     const handleResize = () => {
@@ -329,12 +478,17 @@ export default function Home() {
     window.addEventListener('resize', handleResize);
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
     renderer.domElement.addEventListener('pointerleave', handlePointerLeave);
+    renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     animate();
 
     return () => {
       window.removeEventListener('resize', handleResize);
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
       renderer.domElement.removeEventListener('pointerleave', handlePointerLeave);
+      renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
+      if (tapLiftTimeout) {
+        window.clearTimeout(tapLiftTimeout);
+      }
       window.cancelAnimationFrame(animationFrame);
       renderer.dispose();
       pillarGeometry.dispose();
@@ -342,6 +496,18 @@ export default function Home() {
       pillarTopMaterial.dispose();
       pillarBottomMaterial.dispose();
       pillarGradientMap.dispose();
+      for (const materials of linkMaterials) {
+        for (const material of materials) {
+          material.dispose();
+        }
+      }
+      for (const spriteEntry of linkSprites) {
+        if (!spriteEntry) {
+          continue;
+        }
+        spriteEntry.texture.dispose();
+        spriteEntry.spriteMaterial.dispose();
+      }
       baseGeometry.dispose();
       baseMaterial.dispose();
       floorGeometry.dispose();
