@@ -36,6 +36,8 @@ export default function Home() {
     let hoveredMesh = null;
     let tappedMesh = null;
     let tapLiftTimeout = null;
+    let launchingMesh = null;
+    let pendingLaunchUrl = null;
 
     const ambient = new THREE.AmbientLight('#f7e6ff', 0.7);
     scene.add(ambient);
@@ -144,6 +146,21 @@ export default function Home() {
         color: '#f497ee',
         emissive: '#bc6ecc',
         image: '/sprites/cassidy3.png',
+      },{
+        url: 'https://music.davisbisbee.com',
+        color: '#ebf497',
+        emissive: '#c9cc6e',
+        image: '/sprites/music1.png',
+      },{
+        url: 'https://card.davisbisbee.com',
+        color: '#f4c497',
+        emissive: '#cc976e',
+        image: '/sprites/card1.png',
+      },{
+        url: 'https://games.davisbisbee.com',
+        color: '#b0f497',
+        emissive: '#73cc6e',
+        image: '/sprites/games1.png',
       },
     ];
     const textureLoader = new THREE.TextureLoader();
@@ -212,6 +229,8 @@ export default function Home() {
 
     let animationFrame = 0;
     const hoverLift = 1.1;
+    const launchLift = 14;
+    const launchDuration = 1200;
 
     const getPlaneIntersectionX = (ndcX, planeZ) => {
       const ndcPoint = new THREE.Vector3(ndcX, 0, 0.5).unproject(camera);
@@ -227,6 +246,8 @@ export default function Home() {
       const planeZ = 0;
       const leftEdge = getPlaneIntersectionX(-1, planeZ);
       const rightEdge = getPlaneIntersectionX(1, planeZ);
+      const screenMinX = Math.min(leftEdge, rightEdge);
+      const screenMaxX = Math.max(leftEdge, rightEdge);
       const padding = 10;
       const minX = Math.min(leftEdge, rightEdge) - padding;
       const maxX = Math.max(leftEdge, rightEdge) + padding;
@@ -298,6 +319,10 @@ export default function Home() {
             if (linkIndex >= linkConfigs.length) {
               break;
             }
+            const columnX = rowStartX + columnIndex * pillarSize.width;
+            if (columnX < screenMinX || columnX > screenMaxX) {
+              continue;
+            }
             linkColumnIndices.set(columnIndex, linkIndex);
             linkIndex += 1;
           }
@@ -362,18 +387,42 @@ export default function Home() {
       animationFrame = window.requestAnimationFrame(animate);
       const allMeshes = rowMeshes.flat();
       const time = performance.now() * 0.001;
+      const nowMs = performance.now();
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObjects(allMeshes, false);
       hoveredMesh = intersects.length > 0 ? intersects[0].object : null;
       renderer.domElement.style.cursor =
-        hoveredMesh && hoveredMesh.userData.linkUrl ? 'pointer' : 'default';
+        hoveredMesh && hoveredMesh.userData.linkUrl && !launchingMesh
+          ? 'pointer'
+          : 'default';
 
       for (const mesh of allMeshes) {
         const baseY = mesh.userData.baseY ?? mesh.position.y;
         const currentLift = mesh.userData.currentLift ?? 0;
-        const targetLift =
+        let targetLift =
           mesh === hoveredMesh || mesh === tappedMesh ? hoverLift : 0;
-        const nextLift = currentLift + (targetLift - currentLift) * 0.35;
+        if (mesh.userData.launchStart) {
+          const elapsed = (nowMs - mesh.userData.launchStart) / launchDuration;
+          const clamped = Math.min(Math.max(elapsed, 0), 1);
+          const eased = clamped * clamped * clamped;
+          const extraTime = Math.max(elapsed - 1, 0);
+          const extraLift = extraTime * extraTime * 8;
+          targetLift =
+            hoverLift + (launchLift - hoverLift) * eased + extraLift;
+          if (
+            elapsed >= 1 &&
+            mesh === launchingMesh &&
+            pendingLaunchUrl &&
+            !mesh.userData.launchTriggered
+          ) {
+            mesh.userData.launchTriggered = true;
+            const url = pendingLaunchUrl;
+            pendingLaunchUrl = null;
+            window.location.assign(url);
+          }
+        }
+        const speed = mesh.userData.launchStart ? 0.5 : 0.35;
+        const nextLift = currentLift + (targetLift - currentLift) * speed;
         const bobOffset = mesh.userData.bobOffset ?? 0;
         const bob = Math.sin(time * 0.6 + bobOffset) * 0.35;
         mesh.userData.currentLift = nextLift;
@@ -416,15 +465,20 @@ export default function Home() {
       renderer.domElement.style.cursor = 'default';
     };
 
-    const openLink = (url, isTouch) => {
-      if (isTouch) {
-        window.location.assign(url);
+    const triggerLaunch = (mesh) => {
+      if (!mesh || !mesh.userData.linkUrl || launchingMesh) {
         return;
       }
-      window.open(url, '_blank', 'noopener,noreferrer');
+      launchingMesh = mesh;
+      pendingLaunchUrl = mesh.userData.linkUrl;
+      mesh.userData.launchStart = performance.now();
+      mesh.userData.launchTriggered = false;
     };
 
     const handlePointerDown = (event) => {
+      if (launchingMesh) {
+        return;
+      }
       updatePointerFromEvent(event);
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObjects(rowMeshes.flat(), false);
@@ -436,7 +490,7 @@ export default function Home() {
 
       const isTouch = event.pointerType === 'touch';
       if (!isTouch) {
-        openLink(hitMesh.userData.linkUrl, false);
+        triggerLaunch(hitMesh);
         return;
       }
 
@@ -446,7 +500,7 @@ export default function Home() {
           window.clearTimeout(tapLiftTimeout);
           tapLiftTimeout = null;
         }
-        openLink(hitMesh.userData.linkUrl, true);
+        triggerLaunch(hitMesh);
         return;
       }
 
